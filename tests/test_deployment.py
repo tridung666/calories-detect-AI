@@ -48,7 +48,15 @@ def deployment(tmp_path):
             sys.exit(0)
         assert args[0] == 'compose'
         if '--services' in args:
-            print('ai')
+            print('backend' if os.environ.get('DEPLOY_TEST_MISSING_AI') else 'ai', flush=True)
+            if os.environ.get('DEPLOY_TEST_SERVICE_OUTPUT'):
+                # Like the production Docker CLI, fail if a consumer closes
+                # stdout before all service names have been written.
+                try:
+                    sys.stdout.write('other-service\\n' * 10000)
+                    sys.stdout.flush()
+                except BrokenPipeError:
+                    os._exit(255)
             sys.exit(0)
         stage = ('config' if 'config' in args else 'pull' if 'pull' in args else 'up')
         failure = os.environ.get('DEPLOY_TEST_FAILURE')
@@ -65,13 +73,14 @@ def deployment(tmp_path):
     return stack, script, binary, tmp_path / "docker-calls.jsonl"
 
 
-def run_deploy(deployment, failure=""):
+def run_deploy(deployment, failure="", **extra_variables):
     stack, script, binary, log = deployment
     variables = dict(os.environ,
                      PATH=str(binary) + os.pathsep + os.environ["PATH"],
                      GHCR_TOKEN="test-registry-token", GHCR_USER="test-user",
                      DEPLOY_TEST_LOG=str(log), DEPLOY_TEST_NEW_TAG=NEW_TAG,
                      DEPLOY_TEST_FAILURE=failure)
+    variables.update(extra_variables)
     result = subprocess.run(["bash", str(script), NEW_TAG, str(stack)],
                             env=variables, text=True, capture_output=True, timeout=10)
     fields = dict(line.split("=", 1) for line in (stack / ".env").read_text().splitlines()
@@ -122,3 +131,19 @@ def test_rollback_failure_still_restores_tag_and_reports_failure(deployment):
     assert fields["AI_TAG"] == OLD_TAG
     assert_other_fields_preserved(fields, "frontend-new")
     assert "Previous AI deployment could not be restored" in result.stderr
+
+
+def test_service_check_drains_compose_output_before_matching(deployment):
+    result, fields, _ = run_deploy(deployment, DEPLOY_TEST_SERVICE_OUTPUT="1")
+    assert result.returncode == 0, result.stderr
+    assert fields["AI_TAG"] == NEW_TAG
+    assert_other_fields_preserved(fields, "frontend-old")
+
+
+def test_missing_ai_service_is_reported_before_env_or_container_changes(deployment):
+    result, fields, calls = run_deploy(deployment, DEPLOY_TEST_MISSING_AI="1")
+    assert result.returncode != 0
+    assert "Compose service ai is missing" in result.stderr
+    assert fields["AI_TAG"] == OLD_TAG
+    assert_other_fields_preserved(fields, "frontend-old")
+    assert not any("up" in call["args"] or "login" in call["args"] for call in calls)
