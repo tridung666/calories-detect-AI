@@ -5,6 +5,11 @@ on:
     workflows: [CI]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      diagnose_only:
+        description: Check production SSH without publishing or deploying
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,7 +26,7 @@ jobs:
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == github.event.repository.default_branch &&
        github.event.workflow_run.head_repository.full_name == github.repository) ||
-      (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch)
+      (github.event_name == 'workflow_dispatch' && !inputs.diagnose_only && github.ref_name == github.event.repository.default_branch)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -73,6 +78,10 @@ jobs:
 
   deploy:
     needs: publish
+    if: >-
+      always() && !cancelled() &&
+      (needs.publish.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' && inputs.diagnose_only))
     permissions:
       contents: read
       packages: read
@@ -96,15 +105,62 @@ jobs:
           [[ "$VPS_USER" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_-]*$ ]]
           [[ "$VPS_PORT" =~ ^[0-9]+$ ]]
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
+          if ! ssh-keygen -y -P '' -f ~/.ssh/id_ed25519 > /dev/null; then
+            echo 'VPS_SSH_KEY must be a valid private key without a passphrase' >&2
+            exit 1
+          fi
           if [[ -n "$VPS_SSH_KNOWN_HOSTS" ]]; then
             printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           else
             ssh-keyscan -T 10 -p "$VPS_PORT" -H "$VPS_HOST" > ~/.ssh/known_hosts
           fi
           chmod 600 ~/.ssh/known_hosts
+      - name: Verify production SSH authentication and remote shell
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          ssh -vv -F /dev/null -T -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
+            -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 \
+            "$VPS_USER@$VPS_HOST" \
+            'printf "SSH authentication and remote command OK\n"; command -v bash docker flock'
+      - name: Diagnose streamed Bash and Compose prerequisites
+        if: inputs.diagnose_only
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/calories-detect' }}
+        run: |
+          set -euo pipefail
+          printf -v probe_command 'bash -s -- %q' "$VPS_DEPLOY_PATH"
+          ssh -vv -F /dev/null -T -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
+            -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 "$VPS_USER@$VPS_HOST" "$probe_command" <<'PROBE'
+          set -euo pipefail
+          echo 'Streamed Bash started'
+          cd "$1"
+          test -f docker-compose.yml || { echo 'Missing docker-compose.yml' >&2; exit 1; }
+          test -f .env || { echo 'Missing .env' >&2; exit 1; }
+          test -w .env || { echo '.env is not writable' >&2; exit 1; }
+          docker compose version
+          echo 'Configured Compose services:'
+          docker compose --env-file .env -f docker-compose.yml config --services
+          echo 'Checking the original Compose service pipeline:'
+          for attempt in {1..20}; do
+            services="$(docker compose --env-file .env -f docker-compose.yml config --services)"
+            grep -Fxq ai <<< "$services"
+            printf 'Attempt %s: Compose service check OK\n' "$attempt"
+          done
+          echo 'Read-only prerequisites check completed'
+          PROBE
       - name: Update AI_TAG and deploy existing Compose service
+        if: ${{ !inputs.diagnose_only }}
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -133,7 +189,16 @@ jobs:
           flock -w 300 9
           compose=(docker compose --env-file .env -f docker-compose.yml)
           unset AI_TAG
-          "${compose[@]}" config --services | grep -Fxq ai
+          # Drain Compose output before matching: grep -q on a live pipe can
+          # close it early and make the Docker CLI exit 255 under pipefail.
+          if ! services="$("${compose[@]}" config --services)"; then
+            echo 'Compose configuration could not be read' >&2
+            exit 1
+          fi
+          if ! grep -Fxq ai <<< "$services"; then
+            echo 'Compose service ai is missing' >&2
+            exit 1
+          fi
 
           umask 077
           registry_config="$(mktemp -d)"
@@ -167,8 +232,8 @@ jobs:
             exit 1
           fi
           REMOTE
-          } | ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
-            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+          } | ssh -F /dev/null -T -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
+            -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
             "$VPS_USER@$VPS_HOST" "$remote_command"
       - name: Remove SSH key
         if: always()

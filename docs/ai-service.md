@@ -94,6 +94,23 @@ host key. Otherwise CD discovers the host key with `ssh-keyscan`.
 SSH connection secrets belong in GitHub Actions, not in the VPS application's
 `.env`. Publishing uses GitHub's automatic `GITHUB_TOKEN` with `packages: write`.
 
+The private key must be unencrypted; CD validates it before connecting and
+normalizes Windows line endings. A read-only SSH preflight logs authentication
+and remote-command diagnostics before any deployment change. To investigate
+an SSH failure without publishing an image or changing the VPS, run CD manually
+with the `diagnose_only` input enabled:
+
+```sh
+gh workflow run cd.yml --repo tridung666/calories-detect-AI -f diagnose_only=true
+```
+
+Exit code 255 alone does not distinguish authentication, host-key, network, or
+remote-session errors; use the SSH preflight log to identify the failing stage.
+The Compose service precheck captures the complete service list before matching
+`ai`. Piping that command directly into `grep -q` can close stdout early and
+make the Docker CLI exit 255 under `pipefail`, even when SSH and Compose are
+working. The read-only diagnostic repeats the corrected precheck on the VPS.
+
 On the VPS, add `ai` to the existing `services` in `docker-compose.yml` once.
 Keep the existing frontend, backend and PostgreSQL configuration. The image
 name must match this repository's GHCR package (lowercase owner/repository):
