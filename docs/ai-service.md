@@ -133,7 +133,8 @@ deleted when deployment finishes. No separate GHCR PAT or persistent VPS login
 is required for the package published by this repository. If package access has
 been customized, grant this repository Actions access to its GHCR package.
 
-CD locks `.deploy.lock`, backs up `.env`, updates `AI_TAG`, and runs:
+CD locks `.deploy.lock`, remembers the previous `AI_TAG`, updates that tag,
+and runs:
 
 ```sh
 docker compose --env-file .env -f docker-compose.yml pull ai
@@ -142,8 +143,9 @@ docker compose --env-file .env -f docker-compose.yml up -d --no-deps --no-build 
 
 Only `ai` is updated. Other deployment pipelines should use the same lock when
 modifying this Compose project or `.env`. If validation, pulling or startup
-fails, CD restores `.env` and attempts to restart the previous AI release,
-then marks the deployment failed. A rollback failure is also reported in the
+fails, CD restores only the previous `AI_TAG` and attempts to restart that AI
+release, preserving other services' tags and environment changes. It then marks
+the deployment failed. A rollback failure is also reported in the
 workflow logs. The first deployment has no previous running release to restore.
 
 References: [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs),

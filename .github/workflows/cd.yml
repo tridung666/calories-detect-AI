@@ -141,9 +141,8 @@ jobs:
           export DOCKER_CONFIG="$registry_config"
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
           unset GHCR_TOKEN
-          old_env="$(mktemp)"
-          cp -p .env "$old_env"
-          trap 'rm -f "$old_env"; rm -rf "$registry_config"' EXIT
+          # Remember only AI_TAG so rollback preserves other services' updates.
+          previous_tag_lines="$(grep '^AI_TAG=' .env || true)"
           if grep -q '^AI_TAG=' .env; then
             sed -i "s|^AI_TAG=.*|AI_TAG=${tag}|" .env
           else
@@ -156,9 +155,14 @@ jobs:
             echo "AI deployment healthy: $tag"
           else
             echo 'AI deployment failed; restoring previous AI_TAG' >&2
-            cp -p "$old_env" .env
-            if ! "${compose[@]}" up -d --no-deps --no-build --wait --wait-timeout 120 ai; then
-              echo 'Previous AI deployment could not be restored; check the VPS' >&2
+            sed -i '/^AI_TAG=/d' .env
+            if [[ -n "$previous_tag_lines" ]]; then
+              printf '%s\n' "$previous_tag_lines" >> .env
+              if ! "${compose[@]}" up -d --no-deps --no-build --wait --wait-timeout 120 ai; then
+                echo 'Previous AI deployment could not be restored; check the VPS' >&2
+              fi
+            else
+              echo 'No previous AI_TAG exists; no earlier release can be restarted' >&2
             fi
             exit 1
           fi
