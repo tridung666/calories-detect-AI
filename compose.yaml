@@ -1,0 +1,13 @@
+services:
+  ai:
+    build: .
+    image: calories-detect-ai:local
+    env_file: .env
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${AI_PORT:-8000}:8000"
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

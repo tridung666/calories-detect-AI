@@ -1,0 +1,78 @@
+{
+  "request": {
+    "imageUrl": "https://example.com/meal.jpg"
+  },
+  "providerItem": {
+    "name": "Grilled chicken breast",
+    "estimatedGrams": 150.125,
+    "calories": 248.125,
+    "protein": 46.555,
+    "carbohydrate": 0,
+    "fat": 5.445,
+    "confidence": 0.91
+  },
+  "cases": [
+    {
+      "name": "success",
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "name": "Grilled chicken breast",
+            "estimatedGrams": 150.13,
+            "calories": 248.13,
+            "protein": 46.56,
+            "carbohydrate": 0.0,
+            "fat": 5.45,
+            "confidence": 0.91
+          }
+        ]
+      }
+    },
+    {
+      "name": "no-food",
+      "status": 422,
+      "errorCode": "AI_EMPTY_RESULT",
+      "body": {
+        "code": "no_food_detected",
+        "detail": "No food detected in the image."
+      }
+    },
+    {
+      "name": "invalid-image",
+      "status": 422,
+      "errorCode": "AI_IMAGE_UNREADABLE",
+      "body": {
+        "code": "invalid_image",
+        "detail": "The image could not be accessed or decoded. Supply a publicly accessible image URL."
+      }
+    },
+    {
+      "name": "provider-output",
+      "status": 502,
+      "errorCode": "INVALID_AI_RESPONSE",
+      "body": {
+        "code": "analysis_failed",
+        "detail": "OpenAI returned invalid structured nutrition output."
+      }
+    },
+    {
+      "name": "unavailable",
+      "status": 503,
+      "errorCode": "AI_SERVICE_UNAVAILABLE",
+      "body": {
+        "code": "analysis_failed",
+        "detail": "Configure OPENAI_API_KEY and OPENAI_MODEL to enable meal analysis."
+      }
+    },
+    {
+      "name": "timeout",
+      "status": 504,
+      "errorCode": "AI_SERVICE_TIMEOUT",
+      "body": {
+        "code": "analysis_failed",
+        "detail": "Meal image analysis timed out."
+      }
+    }
+  ]
+}
