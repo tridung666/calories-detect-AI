@@ -68,8 +68,11 @@ OpenAI credits. A real image analysis requires credentials and the curl example.
 
 ## Automatic GHCR / VPS deployment
 
-CI runs tests, builds the Docker image, checks its health and validates the local
-`compose.yaml`. After CI succeeds for a push to the default branch, CD publishes
+CI runs once for each pull request to `main`, and again for pushes to `main`
+to validate the release commit. It tests Python 3.12 and 3.14, builds the Docker
+image, checks its health and validates the local `compose.yaml`. CI and CD use
+Ubuntu 24.04 and Actions with native Node.js 24 runtimes. After CI succeeds for
+a push to the default branch, CD publishes
 `ghcr.io/<owner>/<repository>:sha-<full-commit-sha>` and `:latest`, then deploys the
 SHA tag. Pull requests do not publish or deploy. A manual CD run on the default
 branch runs Python tests before publishing.
